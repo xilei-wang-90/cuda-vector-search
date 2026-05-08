@@ -67,3 +67,11 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Data and embeddings (regenerated locally)
+data/

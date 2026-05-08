@@ -1,0 +1,20 @@
+[project]
+name = "cuda-vector-search"
+version = "0.1.0"
+description = "CUDA-accelerated vector search with parallel Top-K embedding retrieval."
+authors = [{ name = "xilei-wang-90" }]
+readme = "README.md"
+requires-python = ">=3.10,<4.0"
+dependencies = [
+    "sentence-transformers (>=5.0)",
+    "datasets (>=4.0)",
+    "numpy (>=2.0)",
+    "torch (>=2.5)",
+]
+
+[tool.poetry]
+package-mode = false
+
+[build-system]
+requires = ["poetry-core>=2.0.0"]
+build-backend = "poetry.core.masonry.api"
