@@ -18,18 +18,21 @@ RTX 3060.
 4. **Top-K reduction** — on-device sort/heap reduction returns only the top 5
    nearest neighbours instead of shipping the full score array back to the host.
 
-The CUDA stages are coming next; this repo currently ships the ingestion stage.
+Stages 1 and 2 are wired up; the parallel-compute and Top-K kernels come next.
 
 ## Repo layout
 
 ```
-scripts/embed_dataset.py   # Stage 1: fetch + embed + serialize
-pyproject.toml             # Python dependencies (Poetry-managed)
-poetry.lock                # Pinned dependency versions
-data/                      # Generated locally; gitignored
+scripts/embed_dataset.py     # Stage 1: fetch + embed + serialize
+src/check_roundtrip.cu       # Stage 2: H2D / D2H sanity check
+Makefile                     # builds CUDA binaries into build/
+pyproject.toml               # Python dependencies (Poetry-managed)
+poetry.lock                  # Pinned dependency versions
+data/                        # Generated locally; gitignored
   raw/ag_news.jsonl
   embeddings/vectors.fp32.bin
   embeddings/metadata.json
+build/                       # CUDA build outputs; gitignored
 ```
 
 ## Stage 1: ingest + embed
@@ -97,6 +100,44 @@ print(np.argsort(-sims)[:5])             # indices of top-5 nearest neighbours o
 
 For the default ag_news run, the top neighbours of doc 0 are all Wall Street
 stories from the Business label — confirming the embeddings carry semantic signal.
+
+## Stage 2: device round-trip
+
+A minimal CUDA program that confirms the embedding bytes survive a host →
+device → host round-trip. It's the simplest possible test that the file loader,
+`cudaMalloc` allocation, and `cudaMemcpy` directions are all wired up correctly
+before any real kernel work begins.
+
+### Build
+
+Requires the CUDA toolkit (`nvcc`). The Makefile defaults to `sm_86` (RTX 30xx);
+override `CUDA_ARCH` for other GPUs (e.g. `CUDA_ARCH=89` for RTX 40xx).
+
+```bash
+make
+```
+
+### Run
+
+```bash
+./build/check_roundtrip                                        # uses defaults
+./build/check_roundtrip data/embeddings/vectors.fp32.bin 384   # explicit args
+```
+
+Sample output on an RTX 3060:
+
+```
+[load]  data/embeddings/vectors.fp32.bin
+        bytes=15360000  floats=3840000  rows=10000  dim=384
+[gpu]   device 0: NVIDIA GeForce RTX 3060 Laptop GPU  (sm_86, 6.44 GB)
+[alloc] device buffer @ 0x506800000 (15.36 MB)
+[xfer]  H2D: 7.331 ms (2.10 GB/s)   D2H: 2.427 ms (6.33 GB/s)
+[check] OK -- 15360000 bytes round-tripped intact
+[sample] first 5 floats: 0.007439 0.028562 0.041096 0.105001 0.023282
+```
+
+The check uses `memcmp` on the full buffer; any single bit flip would fail it.
+Exit code is `0` on success, `1` otherwise.
 
 ## Data and licensing
 
