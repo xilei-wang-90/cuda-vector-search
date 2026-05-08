@@ -24,7 +24,8 @@ The CUDA stages are coming next; this repo currently ships the ingestion stage.
 
 ```
 scripts/embed_dataset.py   # Stage 1: fetch + embed + serialize
-requirements.txt           # Python dependencies for the ingestion stage
+pyproject.toml             # Python dependencies (Poetry-managed)
+poetry.lock                # Pinned dependency versions
 data/                      # Generated locally; gitignored
   raw/ag_news.jsonl
   embeddings/vectors.fp32.bin
@@ -42,10 +43,11 @@ directly.
 
 ### Setup
 
+Dependencies are managed with [Poetry](https://python-poetry.org/). The repo
+ships a `poetry.toml` that pins the virtualenv to `.venv/` in the project root.
+
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+poetry install --no-root
 ```
 
 GPU acceleration is automatic if a CUDA-enabled PyTorch build is present
@@ -54,8 +56,10 @@ GPU acceleration is automatic if a CUDA-enabled PyTorch build is present
 ### Run
 
 ```bash
-python3 scripts/embed_dataset.py
+poetry run python3 scripts/embed_dataset.py
 ```
+
+(or `poetry shell` once and drop the `poetry run` prefix.)
 
 Useful flags:
 
