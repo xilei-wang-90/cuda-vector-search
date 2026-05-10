@@ -18,13 +18,17 @@ RTX 3060.
 4. **Top-K reduction** — on-device sort/heap reduction returns only the top 5
    nearest neighbours instead of shipping the full score array back to the host.
 
-Stages 1 and 2 are wired up; the parallel-compute and Top-K kernels come next.
+Stages 1–3 are wired up; the on-device Top-K reduction is next (today the
+top-K is taken host-side after the distances come back).
 
 ## Repo layout
 
 ```
 scripts/embed_dataset.py     # Stage 1: fetch + embed + serialize
 src/check_roundtrip.cu       # Stage 2: H2D / D2H sanity check
+src/distance_kernel.cuh      # Stage 3: DistanceKernel class header
+src/distance_kernel.cu       # Stage 3: kernel + class implementation
+src/compute_distances.cu     # Stage 3: driver — load, score, top-K
 Makefile                     # builds CUDA binaries into build/
 pyproject.toml               # Python dependencies (Poetry-managed)
 poetry.lock                  # Pinned dependency versions
@@ -138,6 +142,82 @@ Sample output on an RTX 3060:
 
 The check uses `memcmp` on the full buffer; any single bit flip would fail it.
 Exit code is `0` on success, `1` otherwise.
+
+## Stage 3: distance kernel
+
+A custom CUDA kernel scores every embedding against a query vector in
+parallel, picking up where stage 2 leaves off (right after the H2D copy).
+
+The kernel computes squared L2 distance:
+
+```
+d2[r] = sum_i (E[r, i] - q[i])^2
+```
+
+For the L2-normalised embeddings produced by stage 1 this is monotonically
+equivalent to cosine similarity — `||a - q||^2 = 2 - 2·dot(a, q)` — so the
+ranking is the same as the cosine pipeline mentioned above.
+
+The implementation lives in its own translation unit:
+
+- `src/distance_kernel.cuh` — `DistanceKernel` class interface.
+- `src/distance_kernel.cu` — the `__global__ l2_squared_kernel` and the
+  class methods that own device buffers, upload the matrix, launch the
+  kernel, and copy results back. The matrix is uploaded once and the
+  buffer can be reused across many queries.
+- `src/compute_distances.cu` — driver that loads `vectors.fp32.bin`,
+  picks one row as the query, runs the kernel, and prints timing plus
+  the top-K nearest rows by distance.
+
+### Kernel design
+
+- One CUDA block per row (10,000 blocks for the default dataset).
+- 128 threads per block; each thread accumulates a partial sum over a
+  strided slice of the row, then the block tree-reduces in shared memory
+  to a single distance value.
+- The query vector is staged into shared memory once per block before the
+  reduction starts, so each thread reads it from on-chip memory rather
+  than global memory.
+- Top-K is currently a host-side `std::partial_sort` over the returned
+  distance vector; the on-device reduction is the next pipeline stage.
+
+### Build
+
+The kernel binary is built by the same `make` invocation as stage 2:
+
+```bash
+make
+```
+
+### Run
+
+```bash
+./build/compute_distances                                                  # uses defaults
+./build/compute_distances data/embeddings/vectors.fp32.bin 384 0 5         # path dim query_idx top_k
+```
+
+Sample output on an RTX 3060:
+
+```
+[load]  data/embeddings/vectors.fp32.bin
+        bytes=15360000  rows=10000  dim=384
+[gpu]   device 0: NVIDIA GeForce RTX 3060 Laptop GPU  (sm_86, 6.44 GB)
+[xfer]  H2D embeddings: 3.105 ms (4.95 GB/s)
+[kernel] l2_squared_kernel  blocks=10000  threads/block=128  shmem=2048 B
+         1.258 ms  (9.15 GFLOP/s, 3 flops/elem)
+[query] index=0  self-distance=0.000000 (sanity: ~0)
+[top-5 nearest by squared L2]
+   0: row=0       d2=0.000000
+   1: row=9       d2=0.115367
+   2: row=3817    d2=0.850716
+   3: row=8800    d2=0.913705
+   4: row=3813    d2=0.984546
+```
+
+The self-distance line (`row=query_idx, d2≈0`) is a built-in sanity check:
+the kernel must rank the query as the nearest match to itself with a
+distance of zero. The rest of the ranking matches the numpy reference
+`np.argsort(np.sum((vecs - vecs[0])**2, axis=1))` to six decimals.
 
 ## Data and licensing
 
