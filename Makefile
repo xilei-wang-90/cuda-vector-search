@@ -13,7 +13,7 @@ all: $(BINS)
 $(BUILD_DIR):
 	mkdir -p $@
 
-$(BUILD_DIR)/check_roundtrip: $(SRC_DIR)/check_roundtrip.cu | $(BUILD_DIR)
+$(BUILD_DIR)/check_roundtrip: $(SRC_DIR)/diagnostics/check_roundtrip.cu | $(BUILD_DIR)
 	$(NVCC) $(NVCCFLAGS) $< -o $@
 
 $(BUILD_DIR)/compute_distances: $(SRC_DIR)/compute_distances.cu $(SRC_DIR)/distance_kernel.cu $(SRC_DIR)/distance_kernel.cuh | $(BUILD_DIR)

@@ -24,11 +24,11 @@ top-K is taken host-side after the distances come back).
 ## Repo layout
 
 ```
-scripts/embed_dataset.py     # Stage 1: fetch + embed + serialize
-src/check_roundtrip.cu       # Stage 2: H2D / D2H sanity check
-src/distance_kernel.cuh      # Stage 3: DistanceKernel class header
-src/distance_kernel.cu       # Stage 3: kernel + class implementation
-src/compute_distances.cu     # Stage 3: driver — load, score, top-K
+scripts/embed_dataset.py             # Stage 1: fetch + embed + serialize
+src/diagnostics/check_roundtrip.cu   # H2D / D2H sanity check (diagnostic tool)
+src/distance_kernel.cuh              # Stage 3: DistanceKernel class header
+src/distance_kernel.cu               # Stage 3: kernel + class implementation
+src/compute_distances.cu             # Stage 3: driver — load, score, top-K
 Makefile                     # builds CUDA binaries into build/
 pyproject.toml               # Python dependencies (Poetry-managed)
 poetry.lock                  # Pinned dependency versions
