@@ -32,15 +32,10 @@ public:
     // Copy the row-major (n_rows, dim) float32 matrix to the device.
     void upload_embeddings(const float* h_embeddings);
 
-    // Upload `h_query` (dim floats), launch the distance kernel, copy the
-    // (n_rows,) distance vector back into `h_distances`. Returns kernel-only
-    // elapsed time in milliseconds (excludes H2D/D2H).
-    float compute(const float* h_query, float* h_distances);
-
-    // Stage 4: full GPU pipeline. Upload query, run the distance kernel,
-    // then run the on-device top-K reduction. Only k (distance, index) pairs
-    // come back to the host — the (n_rows,) distance vector never leaves
-    // device memory. `k` must satisfy 1 <= k <= kMaxTopK and k <= n_rows.
+    // Upload query, run the distance kernel, then run the on-device top-K
+    // reduction. Only k (distance, index) pairs come back to the host — the
+    // (n_rows,) distance vector never leaves device memory. `k` must satisfy
+    // 1 <= k <= kMaxTopK and k <= n_rows.
     //
     // On return:
     //   h_topk_dists[0..k) — distances in ascending order

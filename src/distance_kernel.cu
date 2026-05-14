@@ -232,30 +232,6 @@ void DistanceKernel::upload_embeddings(const float* h_embeddings) {
                           cudaMemcpyHostToDevice));
 }
 
-float DistanceKernel::compute(const float* h_query, float* h_distances) {
-    CUDA_CHECK(cudaMemcpy(d_query_, h_query,
-                          static_cast<size_t>(dim_) * sizeof(float),
-                          cudaMemcpyHostToDevice));
-
-    const size_t shmem_bytes =
-        static_cast<size_t>(dim_ + threads_per_block_) * sizeof(float);
-
-    CUDA_CHECK(cudaEventRecord(start_));
-    l2_squared_kernel<<<n_rows_, threads_per_block_, shmem_bytes>>>(
-        d_embeddings_, d_query_, d_distances_, n_rows_, dim_);
-    CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaEventRecord(stop_));
-    CUDA_CHECK(cudaEventSynchronize(stop_));
-
-    float ms = 0.0f;
-    CUDA_CHECK(cudaEventElapsedTime(&ms, start_, stop_));
-
-    CUDA_CHECK(cudaMemcpy(h_distances, d_distances_,
-                          static_cast<size_t>(n_rows_) * sizeof(float),
-                          cudaMemcpyDeviceToHost));
-    return ms;
-}
-
 float DistanceKernel::compute_topk(const float* h_query,
                                    int          k,
                                    float*       h_topk_dists,
