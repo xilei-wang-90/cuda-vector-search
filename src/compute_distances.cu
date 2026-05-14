@@ -1,13 +1,11 @@
-// Stage 3: compute the squared-L2 distance from a query vector to every
-// embedding in the matrix using a custom CUDA kernel, then print the
-// top-K nearest rows.
+// Stage 3 + 4: compute the squared-L2 distance from a query vector to every
+// embedding in the matrix using a custom CUDA kernel, then reduce to the
+// top-K nearest rows entirely on-device. The (N,) distance vector never
+// leaves device memory — only K (distance, index) pairs come back.
 //
 // Layout matches stage 2: the binary at `path` is a contiguous row-major
 // float32 matrix of shape (N, dim). One row is selected as the query;
 // the rest are scored on-device by `DistanceKernel`.
-//
-// Top-K reduction is currently host-side (a partial sort) — the on-device
-// reduction is the next stage of the pipeline.
 //
 // Usage:
 //   ./build/compute_distances [path/to/vectors.fp32.bin] [dim] [query_idx] [top_k]
@@ -17,11 +15,9 @@
 
 #include <cuda_runtime.h>
 
-#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
-#include <utility>
 #include <vector>
 
 #define CUDA_CHECK(expr)                                                    \
@@ -71,9 +67,10 @@ int main(int argc, char** argv) {
                      query_ix, rows);
         return 1;
     }
-    if (top_k <= 0 || top_k > rows) {
-        std::fprintf(stderr, "top_k out of range: %d (rows=%d)\n",
-                     top_k, rows);
+    if (top_k <= 0 || top_k > rows || top_k > DistanceKernel::kMaxTopK) {
+        std::fprintf(stderr,
+                     "top_k out of range: %d (rows=%d, max=%d)\n",
+                     top_k, rows, DistanceKernel::kMaxTopK);
         return 1;
     }
 
@@ -108,32 +105,43 @@ int main(int argc, char** argv) {
 
     const float* h_query = h_embeddings.data() +
                            static_cast<size_t>(query_ix) * dim;
-    std::vector<float> h_distances(rows);
 
-    const float ms_kernel = kernel.compute(h_query, h_distances.data());
-    std::printf("[kernel] %s  blocks=%d  threads/block=%d  shmem=%zu B\n",
-                "l2_squared_kernel", rows, kernel.threads_per_block(),
-                static_cast<size_t>(dim + kernel.threads_per_block()) *
-                    sizeof(float));
+    const int k = top_k;
+    std::vector<float> topk_dists(k);
+    std::vector<int>   topk_idxs(k);
+
+    float ms_distance = 0.0f, ms_topk = 0.0f;
+    const float ms_total = kernel.compute_topk(
+        h_query, k, topk_dists.data(), topk_idxs.data(),
+        &ms_distance, &ms_topk);
+
+    const size_t dist_shmem =
+        static_cast<size_t>(dim + kernel.threads_per_block()) * sizeof(float);
+    const size_t topk_shmem =
+        static_cast<size_t>(kernel.topk_threads_per_block()) *
+        DistanceKernel::kMaxTopK * (sizeof(float) + sizeof(int));
+    std::printf("[kernel] l2_squared_kernel  blocks=%d  threads/block=%d  shmem=%zu B\n",
+                rows, kernel.threads_per_block(), dist_shmem);
     std::printf("         %.3f ms  (%.2f GFLOP/s, 3 flops/elem)\n",
-                ms_kernel,
-                3.0 * rows * dim / (ms_kernel * 1.0e6));
+                ms_distance,
+                3.0 * rows * dim / (ms_distance * 1.0e6));
+    std::printf("[kernel] topk_kernel        blocks=1      threads/block=%d  shmem=%zu B  k=%d\n",
+                kernel.topk_threads_per_block(), topk_shmem, k);
+    std::printf("         %.3f ms\n", ms_topk);
+    std::printf("[total]  on-device kernels: %.3f ms (distance + top-K)\n",
+                ms_total);
 
     CUDA_CHECK(cudaEventDestroy(e_h2d_start));
     CUDA_CHECK(cudaEventDestroy(e_h2d_end));
 
-    // Host-side top-K (partial sort). On-device reduction is the next stage.
-    std::vector<std::pair<float, int>> ranked(rows);
-    for (int i = 0; i < rows; ++i) ranked[i] = {h_distances[i], i};
-    const int k = std::min(top_k, rows);
-    std::partial_sort(ranked.begin(), ranked.begin() + k, ranked.end());
-
-    std::printf("[query] index=%d  self-distance=%.6f (sanity: ~0)\n",
-                query_ix, h_distances[query_ix]);
+    // The on-device top-K is sorted ascending, so the query's own row should
+    // be slot 0 with distance ≈ 0 for an L2-normalised matrix.
+    std::printf("[query] index=%d  nearest=row=%d  d2=%.6f (sanity: row==query_idx, d2~0)\n",
+                query_ix, topk_idxs[0], topk_dists[0]);
     std::printf("[top-%d nearest by squared L2]\n", k);
     for (int i = 0; i < k; ++i) {
         std::printf("  %2d: row=%-6d  d2=%.6f\n",
-                    i, ranked[i].second, ranked[i].first);
+                    i, topk_idxs[i], topk_dists[i]);
     }
     return 0;
 }
